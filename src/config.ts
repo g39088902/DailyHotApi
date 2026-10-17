@@ -16,6 +16,9 @@ export type Config = {
   REDIS_PORT: number;
   REDIS_PASSWORD: string;
   REDIS_DB: number;
+  DEEPSEEK_API_KEY: string;
+  DEEPSEEK_BASE_URL: string;
+  DEEPSEEK_MODEL: string;
 };
 
 // 验证并提取环境变量
@@ -53,4 +56,8 @@ export const config: Config = {
   REDIS_PORT: getNumericEnvVariable("REDIS_PORT", 6379),
   REDIS_PASSWORD: getEnvVariable("REDIS_PASSWORD") || "",
   REDIS_DB:  getNumericEnvVariable("REDIS_DB", 0),
+  DEEPSEEK_API_KEY: getEnvVariable("DEEPSEEK_API_KEY") || "",
+  DEEPSEEK_BASE_URL: getEnvVariable("DEEPSEEK_BASE_URL") || "https://api.deepseek.com",
+  DEEPSEEK_MODEL: getEnvVariable("DEEPSEEK_MODEL") || "deepseek-flash",
 };
+

@@ -70,10 +70,11 @@ for (let index = 0; index < allRoutePath.length; index++) {
     // 获取路由路径
     const { handleRoute } = await import(`./routes/${router}.js`);
     const listData = await handleRoute(c, noCache);
-    // 是否限制条目
-    if (limit && listData?.data?.length > parseInt(limit)) {
-      listData.total = parseInt(limit);
-      listData.data = listData.data.slice(0, parseInt(limit));
+    // 限制单信源最多只返回 30 条（如果传了更小的 limit 则以更小的为准）
+    const maxLimit = limit ? Math.min(parseInt(limit, 10), 30) : 30;
+    if (listData?.data?.length > maxLimit) {
+      listData.total = maxLimit;
+      listData.data = listData.data.slice(0, maxLimit);
     }
     // 是否输出 RSS
     if (rssEnabled || config.RSS_MODE) {

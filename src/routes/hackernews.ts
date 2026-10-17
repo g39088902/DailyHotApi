@@ -1,6 +1,7 @@
 import type { ListItem, RouterData } from "../types.js";
 import { get } from "../utils/getData.js";
 import { load } from "cheerio";
+import { translateTexts } from "../utils/translator.js";
 
 export const handleRoute = async (_: undefined, noCache: boolean) => {
   const listData = await getList(noCache);
@@ -52,6 +53,20 @@ const getList = async (noCache: boolean) => {
       }
     });
 
+    // 使用 DeepSeek 批量翻译标题（直接替换 title 为翻译后的结果）
+    if (stories.length > 0) {
+      const titles = stories.map((s) => s.title);
+      const translatedTitles = await translateTexts({
+        texts: titles,
+        targetLang: "zh-CN",
+        sourceLang: "en",
+        noCache,
+      });
+      stories.forEach((story, index) => {
+        story.title = translatedTitles[index] || story.title;
+      });
+    }
+
     return {
       ...result,
       data: stories,
@@ -60,3 +75,4 @@ const getList = async (noCache: boolean) => {
     throw new Error(`Failed to parse HackerNews HTML: ${error}`);
   }
 };
+
