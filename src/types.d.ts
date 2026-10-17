@@ -21,6 +21,8 @@ export interface ScoreResult {
   userReason?: string | null;
   isUserModified?: boolean;
   userUpdatedAt?: string | null;
+  isRead?: boolean;
+  readAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
   fromCache?: boolean;
@@ -44,6 +46,9 @@ export interface ListItem {
   aiScore?: number;
   userScore?: number | null;
   isUserModified?: boolean;
+  isRead?: boolean;
+  readAt?: string | null;
+  fromCache?: boolean;
 }
 
 // 路由接口数据

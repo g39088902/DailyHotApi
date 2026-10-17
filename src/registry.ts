@@ -7,13 +7,16 @@ import {
   scoreNewsItem,
   scoreNewsBatch,
   formatNewsInput,
+  extractNewsMetadata,
   updateManualScoreItem,
+  updateNewsReadStatusItem,
 } from "./utils/scorer.js";
-import type { ScoreInputItem, ManualScoreInput } from "./utils/scorer.js";
+import type { ScoreInputItem, ManualScoreInput, ReadStatusInput } from "./utils/scorer.js";
 import {
   getScoreRecordByHash,
   getScoreRecordById,
   queryScoreRecords,
+  getAllReadNewsHashes,
   rowToScoreResult,
 } from "./utils/scoreDb.js";
 import logger from "./utils/logger.js";
@@ -291,6 +294,89 @@ app.post("/score/feedback", handleManualScoreUpdate);
 app.put("/score", handleManualScoreUpdate);
 app.patch("/score", handleManualScoreUpdate);
 
+// 接收新闻已读状态标记的通用处理器（支持单条或批量标记已读/未读）
+const handleNewsReadStatusUpdate = async (c: any) => {
+  try {
+    let body: any = {};
+    const contentType = c.req.header("content-type") || "";
+    if (contentType.includes("application/json")) {
+      body = await c.req.json();
+    } else {
+      const rawText = await c.req.text();
+      if (rawText.trim()) {
+        body = JSON.parse(rawText);
+      }
+    }
+
+    const batchItems: ReadStatusInput[] | null = Array.isArray(body)
+      ? body
+      : Array.isArray(body?.items)
+        ? body.items
+        : Array.isArray(body?.data)
+          ? body.data
+          : null;
+
+    if (batchItems !== null) {
+      const defaultIsRead = typeof body?.isRead === "boolean" ? body.isRead : true;
+      const results: any[] = [];
+      for (const item of batchItems) {
+        try {
+          const payloadItem =
+            typeof item === "string"
+              ? { newsHash: item, isRead: defaultIsRead }
+              : {
+                  ...item,
+                  isRead: item.isRead !== undefined ? item.isRead : defaultIsRead,
+                };
+          results.push(updateNewsReadStatusItem(payloadItem));
+        } catch {
+          // 忽略单条缺少内容的异常，保证批量顺畅完成
+        }
+      }
+      return c.json({
+        code: 200,
+        message: "批量已读状态已保存",
+        total: results.length,
+        data: results,
+      });
+    }
+
+    const result = updateNewsReadStatusItem(body as ReadStatusInput);
+    return c.json({
+      code: 200,
+      message: result.isRead ? "已标记为已读" : "已标记为未读",
+      ...result,
+      data: result,
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Unknown error";
+    logger.error(`❌ [Read Status Update] ${msg}`);
+    return c.json({ code: 400, message: `更新已读状态失败: ${msg}` }, 400);
+  }
+};
+
+app.post("/score/read", handleNewsReadStatusUpdate);
+app.put("/score/read", handleNewsReadStatusUpdate);
+app.patch("/score/read", handleNewsReadStatusUpdate);
+
+// 查询全部已读新闻哈希集合（供前端跨端同步与快速过滤）
+app.get("/score/read", (c) => {
+  try {
+    const limit = c.req.query("limit") ? parseInt(c.req.query("limit")!, 10) : 5000;
+    const hashes = getAllReadNewsHashes(limit);
+    return c.json({
+      code: 200,
+      total: hashes.length,
+      hashes,
+      data: hashes,
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Unknown error";
+    logger.error(`❌ [GET /score/read] ${msg}`);
+    return c.json({ code: 500, message: `查询已读记录失败: ${msg}` }, 500);
+  }
+});
+
 // 查询 SQLite 中存储的新闻打分与用户修正记录接口（供将来 AI 自动调整推荐逻辑或后台分析调用）
 const handleQueryScoreRecords = (defaultOnlyModified: boolean) => (c: any) => {
   try {
@@ -341,12 +427,19 @@ const handleQueryScoreRecords = (defaultOnlyModified: boolean) => (c: any) => {
         ? modifiedQuery === "true" || modifiedQuery === "1"
         : defaultOnlyModified;
 
+    const readQuery = c.req.query("read") ?? c.req.query("isRead");
+    const onlyRead =
+      readQuery !== undefined
+        ? readQuery === "true" || readQuery === "1"
+        : undefined;
+
     const source = c.req.query("source") || undefined;
     const limit = c.req.query("limit") ? parseInt(c.req.query("limit"), 10) : 100;
     const offset = c.req.query("offset") ? parseInt(c.req.query("offset"), 10) : 0;
 
     const { total, items } = queryScoreRecords({
       onlyUserModified,
+      onlyRead,
       source,
       limit,
       offset,

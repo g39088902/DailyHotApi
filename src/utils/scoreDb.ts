@@ -22,6 +22,8 @@ export interface NewsScoreRow {
   user_reason: string | null;
   is_user_modified: number;
   user_updated_at: string | null;
+  is_read: number;
+  read_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -56,8 +58,20 @@ export interface SaveUserManualScoreParams {
   aiReason?: string;
 }
 
+export interface SaveNewsReadStatusParams {
+  id?: number;
+  newsHash?: string;
+  source?: string;
+  title?: string;
+  desc?: string;
+  url?: string;
+  formattedText?: string;
+  isRead?: boolean;
+}
+
 export interface QueryScoreRecordsParams {
   onlyUserModified?: boolean;
+  onlyRead?: boolean;
   source?: string;
   limit?: number;
   offset?: number;
@@ -115,6 +129,8 @@ export const getScoreDb = (): DatabaseSync => {
       user_reason TEXT DEFAULT NULL,
       is_user_modified INTEGER NOT NULL DEFAULT 0,
       user_updated_at TEXT DEFAULT NULL,
+      is_read INTEGER NOT NULL DEFAULT 0,
+      read_at TEXT DEFAULT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -123,6 +139,23 @@ export const getScoreDb = (): DatabaseSync => {
     CREATE INDEX IF NOT EXISTS idx_news_scores_created_at ON news_scores(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_news_scores_source ON news_scores(source);
   `);
+
+  // 兼容已有数据库：检查并自动补全 is_read 与 read_at 列
+  try {
+    const columns = db.prepare("PRAGMA table_info(news_scores)").all() as Array<{ name: string }>;
+    const colNames = new Set(columns.map((c) => c.name));
+    if (!colNames.has("is_read")) {
+      db.exec("ALTER TABLE news_scores ADD COLUMN is_read INTEGER NOT NULL DEFAULT 0;");
+    }
+    if (!colNames.has("read_at")) {
+      db.exec("ALTER TABLE news_scores ADD COLUMN read_at TEXT DEFAULT NULL;");
+    }
+    db.exec("CREATE INDEX IF NOT EXISTS idx_news_scores_is_read ON news_scores(is_read);");
+  } catch (err) {
+    logger.warn(
+      `⚠️ [SQLite] Migration check warning: ${err instanceof Error ? err.message : "Unknown error"}`,
+    );
+  }
 
   dbInstance = db;
   logger.info(`🗄️ [SQLite] News score database initialized at ${dbPath}`);
@@ -166,6 +199,8 @@ export const rowToScoreResult = (row: NewsScoreRow, fromCache: boolean): ScoreRe
     userReason: row.user_reason,
     isUserModified: Boolean(row.is_user_modified),
     userUpdatedAt: row.user_updated_at,
+    isRead: Boolean(row.is_read),
+    readAt: row.read_at ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     fromCache,
@@ -409,7 +444,113 @@ export const saveUserManualScore = (params: SaveUserManualScoreParams): NewsScor
 };
 
 /**
- * 查询 SQLite 中的新闻评分记录列表（支持只筛选用户手动修正过的记录，供 AI 自动调优读取）
+ * 保存或更新单条新闻的已读状态（支持评分完成前先落库已读状态，后续 AI 评分不会覆盖 is_read）
+ */
+export const saveNewsReadStatus = (params: SaveNewsReadStatusParams): NewsScoreRow | null => {
+  const db = getScoreDb();
+  const now = new Date().toISOString();
+  const isRead = params.isRead !== undefined ? Boolean(params.isRead) : true;
+  const isReadVal = isRead ? 1 : 0;
+  const readAtVal = isRead ? now : null;
+
+  let existing: NewsScoreRow | null = null;
+  if (typeof params.id === "number" && Number.isInteger(params.id) && params.id > 0) {
+    existing = getScoreRecordById(params.id);
+  }
+  if (!existing && params.newsHash) {
+    existing = getScoreRecordByHash(params.newsHash);
+  }
+
+  if (existing) {
+    const updateStmt = db.prepare(`
+      UPDATE news_scores
+      SET is_read = ?,
+          read_at = CASE WHEN ? = 1 THEN COALESCE(read_at, ?) ELSE NULL END,
+          updated_at = ?,
+          source = CASE WHEN ? != '' THEN ? ELSE source END,
+          title = CASE WHEN ? != '' THEN ? ELSE title END,
+          desc_text = CASE WHEN ? != '' THEN ? ELSE desc_text END,
+          url = CASE WHEN ? != '' THEN ? ELSE url END
+      WHERE id = ?
+    `);
+
+    const source = (params.source || "").trim();
+    const title = (params.title || "").trim();
+    const desc = (params.desc || "").trim();
+    const url = (params.url || "").trim();
+
+    updateStmt.run(
+      isReadVal,
+      isReadVal,
+      readAtVal,
+      now,
+      source,
+      source,
+      title,
+      title,
+      desc,
+      desc,
+      url,
+      url,
+      existing.id,
+    );
+
+    return getScoreRecordById(existing.id);
+  }
+
+  // 若数据库中尚无该条记录，且传入了有效的 newsHash 与 formattedText，则预先插入一条占位记录（ai_score = -1 表示尚未完成 AI 评分）
+  if (!params.newsHash || !params.formattedText) {
+    return null;
+  }
+
+  const insertStmt = db.prepare(`
+    INSERT INTO news_scores (
+      news_hash, source, title, desc_text, url, formatted_text,
+      ai_score, ai_layer, ai_reason, ai_model,
+      is_read, read_at,
+      created_at, updated_at
+    ) VALUES (
+      ?, ?, ?, ?, ?, ?,
+      -1, 'Uncertain', '', '',
+      ?, ?,
+      ?, ?
+    )
+  `);
+
+  insertStmt.run(
+    params.newsHash,
+    (params.source || "").trim(),
+    (params.title || "").trim(),
+    (params.desc || "").trim(),
+    (params.url || "").trim(),
+    params.formattedText,
+    isReadVal,
+    readAtVal,
+    now,
+    now,
+  );
+
+  return getScoreRecordByHash(params.newsHash);
+};
+
+/**
+ * 获取所有已读新闻的 newsHash 列表（供前端初始化同步跨端已读状态）
+ */
+export const getAllReadNewsHashes = (limit = 5000): string[] => {
+  const db = getScoreDb();
+  const safeLimit = Math.max(1, Math.min(limit, 20000));
+  const stmt = db.prepare(`
+    SELECT news_hash FROM news_scores
+    WHERE is_read = 1
+    ORDER BY COALESCE(read_at, updated_at) DESC
+    LIMIT ?
+  `);
+  const rows = stmt.all(safeLimit) as Array<{ news_hash: string }>;
+  return rows.map((r) => r.news_hash).filter(Boolean);
+};
+
+/**
+ * 查询 SQLite 中的新闻评分记录列表（支持只筛选用户手动修正过或已读的记录，供 AI 自动调优读取）
  */
 export const queryScoreRecords = (
   params: QueryScoreRecordsParams = {},
@@ -420,6 +561,10 @@ export const queryScoreRecords = (
 
   if (params.onlyUserModified) {
     conditions.push("is_user_modified = 1");
+  }
+  if (params.onlyRead !== undefined) {
+    conditions.push("is_read = ?");
+    bindValues.push(params.onlyRead ? 1 : 0);
   }
   if (params.source && params.source.trim()) {
     conditions.push("source = ?");

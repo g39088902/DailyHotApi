@@ -6,8 +6,10 @@ import {
   getScoreRecordByHash,
   saveAiScoreRecord,
   saveUserManualScore,
+  saveNewsReadStatus,
   rowToScoreResult,
   type SaveUserManualScoreParams,
+  type SaveNewsReadStatusParams,
 } from "./scoreDb.js";
 import type { ScoreLayer, ScoreResult } from "../types.js";
 import { SCORE_PROMPT } from "./scorePrompt.js";
@@ -215,11 +217,11 @@ export const scoreNewsItem = async (
     };
   }
 
-  // 1. 优先查询 SQLite 持久化数据库缓存
+  // 1. 优先查询 SQLite 持久化数据库缓存（若仅有已读占位记录 ai_score = -1 且未手动打分，则仍需继续调用 AI 打分）
   if (!forceRescore) {
     try {
       const dbRecord = getScoreRecordByHash(newsHash);
-      if (dbRecord) {
+      if (dbRecord && (dbRecord.ai_score >= 0 || Boolean(dbRecord.is_user_modified))) {
         return rowToScoreResult(dbRecord, true);
       }
     } catch (dbErr) {
@@ -296,6 +298,7 @@ export const scoreNewsItem = async (
       aiLayer: parsed.layer,
       aiReason: parsed.reason,
       isUserModified: false,
+      isRead: false,
       fromCache: false,
     };
   }
@@ -380,6 +383,52 @@ export const updateManualScoreItem = (payload: ManualScoreInput): ScoreResult =>
   logger.info(
     `✏️ [Scorer] User manually updated score (id=${updatedRow.id}, ai=${updatedRow.ai_score} -> user=${updatedRow.user_score}): ${updatedRow.title || updatedRow.formatted_text.slice(0, 40)}`,
   );
+
+  return rowToScoreResult(updatedRow, true);
+};
+
+export interface ReadStatusInput extends ScoreInputItem {
+  recordId?: number;
+  newsHash?: string;
+  isRead?: boolean;
+}
+
+/**
+ * 标记或更新单条新闻的已读状态
+ */
+export const updateNewsReadStatusItem = (payload: ReadStatusInput): ScoreResult => {
+  const meta = extractNewsMetadata(payload);
+  const recordId =
+    typeof payload.recordId === "number"
+      ? payload.recordId
+      : typeof payload.id === "number"
+        ? payload.id
+        : typeof payload.id === "string" && /^\d+$/.test(payload.id)
+          ? parseInt(payload.id, 10)
+          : undefined;
+
+  const targetHash =
+    typeof payload.newsHash === "string" && payload.newsHash.trim()
+      ? payload.newsHash.trim()
+      : meta.newsHash;
+
+  const saveParams: SaveNewsReadStatusParams = {
+    id: recordId,
+    newsHash: targetHash || undefined,
+    source: meta.source,
+    title: meta.title,
+    desc: meta.desc,
+    url: meta.url,
+    formattedText: meta.formattedText || undefined,
+    isRead: payload.isRead !== undefined ? Boolean(payload.isRead) : true,
+  };
+
+  const updatedRow = saveNewsReadStatus(saveParams);
+  if (!updatedRow) {
+    throw new Error(
+      "未找到对应的新闻记录，请提供有效的 id / newsHash，或提供完整的新闻内容（如 title、desc、source）以记录已读状态",
+    );
+  }
 
   return rowToScoreResult(updatedRow, true);
 };
