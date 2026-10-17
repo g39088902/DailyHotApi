@@ -3,6 +3,7 @@ import { get } from "../utils/getData.js";
 import { getTime } from "../utils/getTime.js";
 import { parseRSS } from "../utils/parseRSS.js";
 import { translateTexts } from "../utils/translator.js";
+import { deduplicateArticles } from "../utils/deduplicate.js";
 
 const typeMap: Record<string, string> = {
   latest: "最新要闻",
@@ -57,8 +58,8 @@ const getList = async (options: Options, noCache: boolean): Promise<RouterResTyp
 
   const list = await parseRSS(result.data);
 
-  // 清洗并限制最多 30 条，避免多余请求与消耗
-  const rawItems = list.slice(0, 30).map((v, i) => {
+  // 先清洗并在翻译前执行跨分类英文标题去重，限制最多保留 30 条不重复内容
+  const mappedItems = list.map((v, i) => {
     const rawTitle = (v.title || "").replace(/\s*-\s*Reuters$/i, "").trim();
     return {
       id: v.guid || i,
@@ -72,18 +73,33 @@ const getList = async (options: Options, noCache: boolean): Promise<RouterResTyp
     };
   });
 
-  // 使用 DeepSeek 批量翻译标题
+  const rawItems = deduplicateArticles(mappedItems, `raw:reuters:${type}`, {
+    noCache,
+    maxItems: 30,
+  });
+
+  // 使用 DeepSeek 批量翻译标题与简介
   if (rawItems.length > 0) {
     const titles = rawItems.map((item) => item.title);
-    const translatedTitles = await translateTexts({
-      texts: titles,
+    const descs = rawItems.map((item) => item.desc || "");
+
+    // 收集所有需要翻译的文本（标题 + 简介）
+    const allTexts = [...titles, ...descs];
+    const translatedTexts = await translateTexts({
+      texts: allTexts,
       targetLang: "zh-CN",
       sourceLang: "en",
       noCache,
     });
 
+    const translatedTitles = translatedTexts.slice(0, titles.length);
+    const translatedDescs = translatedTexts.slice(titles.length);
+
     rawItems.forEach((item, index) => {
       item.title = translatedTitles[index] || item.title;
+      if (item.desc) {
+        item.desc = translatedDescs[index] || item.desc;
+      }
     });
   }
 

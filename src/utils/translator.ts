@@ -82,11 +82,11 @@ export const translateTexts = async (options: TranslateOptions): Promise<string[
   await Promise.all(
     chunks.map(async ({ chunkIndices, chunkTexts }) => {
       try {
-        const prompt = `You are a professional translator for tech news and article titles.
-Translate the following array of ${sourceLang} titles into natural and fluent ${targetLang}.
+        const prompt = `You are a professional translator for global news, finance, technology headlines, and summaries.
+Translate the following array of ${sourceLang} texts into natural, fluent, and accurate ${targetLang}.
 Strict rules:
 1. Return ONLY a valid JSON array of strings matching the exact length and order of the input.
-2. Keep technical terms, product names, and brand names in their standard recognized form (or original English if commonly untranslated).
+2. Keep financial/technical terms, ticker symbols, company/brand names, and proper nouns in their standard recognized form (or original English if commonly untranslated).
 3. Do not include markdown code blocks, explanatory comments, or quotes outside the array.
 
 Input JSON:

@@ -14,6 +14,22 @@ import Error from "./views/Error.js";
 
 const app = new Hono();
 
+// CORS（置于最前，确保 OPTIONS 预检与所有响应均携带合法跨域头）
+app.use(
+  "*",
+  cors({
+    origin: (origin) => {
+      if (!origin) return "*";
+      const isSame = config.ALLOWED_HOST && origin.endsWith(config.ALLOWED_HOST);
+      if (isSame) return origin;
+      return config.ALLOWED_DOMAIN === "*" ? origin : config.ALLOWED_DOMAIN;
+    },
+    allowMethods: ["POST", "GET", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowHeaders: ["Content-Type", "Authorization", "X-Custom-Header", "Upgrade-Insecure-Requests"],
+    credentials: true,
+  }),
+);
+
 // 压缩响应
 app.use(compress());
 
@@ -22,22 +38,6 @@ app.use(prettyJSON());
 
 // 尾部斜杠重定向
 app.use(trimTrailingSlash());
-
-// CORS
-app.use(
-  "*",
-  cors({
-    // 可写为数组
-    origin: (origin) => {
-      // 是否指定域名
-      const isSame = config.ALLOWED_HOST && origin.endsWith(config.ALLOWED_HOST);
-      return isSame ? origin : config.ALLOWED_DOMAIN;
-    },
-    allowMethods: ["POST", "GET", "OPTIONS"],
-    allowHeaders: ["X-Custom-Header", "Upgrade-Insecure-Requests"],
-    credentials: true,
-  }),
-);
 
 // 静态资源
 app.use(
