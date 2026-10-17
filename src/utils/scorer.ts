@@ -495,3 +495,66 @@ export const scoreNewsBatch = async <T extends string | ScoreInputItem>(
 
   return results;
 };
+
+export interface CachedLookupResult extends Partial<ScoreResult> {
+  newsHash: string;
+  hit: boolean;
+  isRead: boolean;
+}
+
+/**
+ * 批量仅查询 SQLite 本地缓存评分（不触发 AI 远程调用，毫秒级返回）
+ */
+export const lookupCachedScoresBatch = (
+  items: Array<string | ScoreInputItem>,
+): CachedLookupResult[] => {
+  if (!Array.isArray(items) || items.length === 0) {
+    return [];
+  }
+
+  return items.map((item) => {
+    const meta = extractNewsMetadata(item);
+    const { newsHash } = meta;
+    if (!newsHash) {
+      return {
+        newsHash: "",
+        hit: false,
+        isRead: false,
+      };
+    }
+
+    try {
+      const dbRecord = getScoreRecordByHash(newsHash);
+      if (!dbRecord) {
+        return {
+          newsHash,
+          hit: false,
+          isRead: false,
+        };
+      }
+
+      if (dbRecord.ai_score >= 0 || Boolean(dbRecord.is_user_modified)) {
+        return {
+          ...rowToScoreResult(dbRecord, true),
+          newsHash,
+          hit: true,
+          isRead: Boolean(dbRecord.is_read),
+        };
+      }
+
+      // 仅有已读占位记录（ai_score = -1），尚未完成 AI 评分
+      return {
+        newsHash,
+        hit: false,
+        isRead: Boolean(dbRecord.is_read),
+      };
+    } catch {
+      return {
+        newsHash,
+        hit: false,
+        isRead: false,
+      };
+    }
+  });
+};
+

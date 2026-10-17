@@ -6,6 +6,7 @@ import { deduplicateArticles } from "./utils/deduplicate.js";
 import {
   scoreNewsItem,
   scoreNewsBatch,
+  lookupCachedScoresBatch,
   formatNewsInput,
   extractNewsMetadata,
   updateManualScoreItem,
@@ -193,6 +194,17 @@ app.post("/score", async (c) => {
             : null;
 
     if (batchItems !== null) {
+      const cacheOnly = c.req.query("cacheOnly") === "true" || body?.cacheOnly === true;
+      if (cacheOnly) {
+        const cachedList = lookupCachedScoresBatch(batchItems);
+        return c.json({
+          code: 200,
+          message: "缓存查询成功",
+          total: cachedList.length,
+          data: cachedList,
+        });
+      }
+
       const forceRescore =
         queryForceRescore || body?.force === true || body?.rescore === true || body?.forceRescore === true;
       const shouldSort = querySort || body?.sort === true;
@@ -239,6 +251,43 @@ app.post("/score", async (c) => {
     return c.json({ code: 500, message: `评分失败: ${msg}` }, 500);
   }
 });
+
+// 批量仅查询 SQLite 本地缓存评分接口（毫秒级返回，不触发 AI 调用）
+app.post("/score/cache", async (c) => {
+  try {
+    let body: any = {};
+    const contentType = c.req.header("content-type") || "";
+    if (contentType.includes("application/json")) {
+      body = await c.req.json();
+    } else {
+      const rawText = await c.req.text();
+      if (rawText.trim()) {
+        body = JSON.parse(rawText);
+      }
+    }
+
+    const batchItems: Array<string | ScoreInputItem> = Array.isArray(body)
+      ? body
+      : Array.isArray(body?.items)
+        ? body.items
+        : Array.isArray(body?.data)
+          ? body.data
+          : [];
+
+    const cachedList = lookupCachedScoresBatch(batchItems);
+    return c.json({
+      code: 200,
+      message: "缓存查询成功",
+      total: cachedList.length,
+      data: cachedList,
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Unknown error";
+    logger.error(`❌ [POST /score/cache] ${msg}`);
+    return c.json({ code: 500, message: `查询缓存评分失败: ${msg}` }, 500);
+  }
+});
+
 
 // 接收用户手动修正分数的通用处理器（支持单条或批量修正、支持重置，供将来 AI 自动调整推荐逻辑使用）
 const handleManualScoreUpdate = async (c: any) => {
