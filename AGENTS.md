@@ -58,8 +58,7 @@ DailyHot 从传统单调的“热榜聚合页面”彻底演化为**面向工程
 ```mermaid
 flowchart TD
     subgraph Client["前端展现层 (DailyHotFront)"]
-        StreamView["全网聚合流式视图\n(Stream.vue)"]
-        BoardView["经典多列看板\n(Home.vue)"]
+        StreamView["全网聚合流式视图 - 首页\n(Stream.vue)"]
         PiniaStore["状态管理\n(useSiteStore)"]
         StreamComposables["Composables 逻辑集\n(Sources / Scoring / ReadStatus)"]
     end
@@ -208,13 +207,11 @@ DailyHot/
     │   ├── store/                     # Pinia 状态管理
     │   │   └── index.js               # mainStore (主题, 启用的信源列表, 已读状态, 字号)
     │   ├── views/                     # 核心页面视图
-    │   │   ├── Stream.vue             # 🌊 全网聚合流式情报主视图 (AI 优先重排, 隐藏已读)
-    │   │   ├── Home.vue               # 📊 经典多列卡片看板主视图
+    │   │   ├── Stream.vue             # 🌊 全网聚合流式情报主视图 - 首页 (AI 优先重排, 隐藏已读)
     │   │   └── Setting.vue            # ⚙️ 信源管理与个性化设置页面
     │   ├── components/                # 通用组件
     │   │   ├── Header.vue             # 经典顶部导航栏
     │   │   ├── Footer.vue             # 底部信息栏
-    │   │   ├── HotList.vue            # 单个信源卡片组件 (用于 Home.vue)
     │   │   └── Stream/                # 🌊 流式视图专用组件集
     │   │       ├── StreamHeader.vue          # 流式视图顶部控制栏 (搜索, 过滤, 隐藏已读)
     │   │       ├── StreamArticleItem.vue     # 单条资讯卡片 (序号, 徽章, 标题, 摘要, 已读状态)
