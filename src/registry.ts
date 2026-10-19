@@ -196,7 +196,7 @@ app.post("/score", async (c) => {
     if (batchItems !== null) {
       const cacheOnly = c.req.query("cacheOnly") === "true" || body?.cacheOnly === true;
       if (cacheOnly) {
-        const cachedList = lookupCachedScoresBatch(batchItems);
+        const cachedList = await lookupCachedScoresBatch(batchItems);
         return c.json({
           code: 200,
           message: "缓存查询成功",
@@ -274,7 +274,7 @@ app.post("/score/cache", async (c) => {
           ? body.data
           : [];
 
-    const cachedList = lookupCachedScoresBatch(batchItems);
+    const cachedList = await lookupCachedScoresBatch(batchItems);
     return c.json({
       code: 200,
       message: "缓存查询成功",
@@ -312,7 +312,7 @@ const handleManualScoreUpdate = async (c: any) => {
           : null;
 
     if (batchItems !== null) {
-      const results = batchItems.map((item) => updateManualScoreItem(item));
+      const results = await Promise.all(batchItems.map((item) => updateManualScoreItem(item)));
       return c.json({
         code: 200,
         message: "批量用户评分修正已保存",
@@ -321,7 +321,7 @@ const handleManualScoreUpdate = async (c: any) => {
       });
     }
 
-    const result = updateManualScoreItem(body as ManualScoreInput);
+    const result = await updateManualScoreItem(body as ManualScoreInput);
     return c.json({
       code: 200,
       message: result.isUserModified ? "用户评分修正已保存" : "已重置为 AI 原始评分",
@@ -377,7 +377,7 @@ const handleNewsReadStatusUpdate = async (c: any) => {
                   ...item,
                   isRead: item.isRead !== undefined ? item.isRead : defaultIsRead,
                 };
-          results.push(updateNewsReadStatusItem(payloadItem));
+          results.push(await updateNewsReadStatusItem(payloadItem));
         } catch {
           // 忽略单条缺少内容的异常，保证批量顺畅完成
         }
@@ -390,7 +390,7 @@ const handleNewsReadStatusUpdate = async (c: any) => {
       });
     }
 
-    const result = updateNewsReadStatusItem(body as ReadStatusInput);
+    const result = await updateNewsReadStatusItem(body as ReadStatusInput);
     return c.json({
       code: 200,
       message: result.isRead ? "已标记为已读" : "已标记为未读",
@@ -409,10 +409,10 @@ app.put("/score/read", handleNewsReadStatusUpdate);
 app.patch("/score/read", handleNewsReadStatusUpdate);
 
 // 查询全部已读新闻哈希集合（供前端跨端同步与快速过滤）
-app.get("/score/read", (c) => {
+app.get("/score/read", async (c) => {
   try {
     const limit = c.req.query("limit") ? parseInt(c.req.query("limit")!, 10) : 5000;
-    const hashes = getAllReadNewsHashes(limit);
+    const hashes = await getAllReadNewsHashes(limit);
     return c.json({
       code: 200,
       total: hashes.length,
@@ -426,14 +426,14 @@ app.get("/score/read", (c) => {
   }
 });
 
-// 查询 SQLite 中存储的新闻打分与用户修正记录接口（供将来 AI 自动调整推荐逻辑或后台分析调用）
-const handleQueryScoreRecords = (defaultOnlyModified: boolean) => (c: any) => {
+// 查询数据库中存储的新闻打分与用户修正记录接口（供将来 AI 自动调整推荐逻辑或后台分析调用）
+const handleQueryScoreRecords = (defaultOnlyModified: boolean) => async (c: any) => {
   try {
     const idParam = c.req.query("id");
     const hashParam = c.req.query("newsHash") || c.req.query("hash");
 
     if (idParam && /^\d+$/.test(idParam)) {
-      const row = getScoreRecordById(parseInt(idParam, 10));
+      const row = await getScoreRecordById(parseInt(idParam, 10));
       if (!row) {
         return c.json({ code: 404, message: "未找到对应的评分记录" }, 404);
       }
@@ -452,7 +452,7 @@ const handleQueryScoreRecords = (defaultOnlyModified: boolean) => (c: any) => {
     }
 
     if (hashParam) {
-      const row = getScoreRecordByHash(hashParam.trim());
+      const row = await getScoreRecordByHash(hashParam.trim());
       if (!row) {
         return c.json({ code: 404, message: "未找到对应的评分记录" }, 404);
       }
@@ -486,7 +486,7 @@ const handleQueryScoreRecords = (defaultOnlyModified: boolean) => (c: any) => {
     const limit = c.req.query("limit") ? parseInt(c.req.query("limit"), 10) : 100;
     const offset = c.req.query("offset") ? parseInt(c.req.query("offset"), 10) : 0;
 
-    const { total, items } = queryScoreRecords({
+    const { total, items } = await queryScoreRecords({
       onlyUserModified,
       onlyRead,
       source,

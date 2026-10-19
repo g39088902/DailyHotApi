@@ -37,6 +37,7 @@
   "type": "module",
   "dependencies": {
     "@hono/node-server": "^1.17.1",
+    "@libsql/client": "^0.18.0",
     "axios": "^1.11.0",
     "chalk": "^5.4.1",
     "cheerio": "^1.1.2",

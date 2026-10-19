@@ -4,12 +4,14 @@ import { config } from "../config.js";
 import logger from "./logger.js";
 import {
   getScoreRecordByHash,
+  getScoreRecordsByHashes,
   saveAiScoreRecord,
   saveUserManualScore,
   saveNewsReadStatus,
   rowToScoreResult,
   type SaveUserManualScoreParams,
   type SaveNewsReadStatusParams,
+  type NewsScoreRow,
 } from "./scoreDb.js";
 import type { ScoreLayer, ScoreResult } from "../types.js";
 import { SCORE_PROMPT } from "./scorePrompt.js";
@@ -217,16 +219,16 @@ export const scoreNewsItem = async (
     };
   }
 
-  // 1. 优先查询 SQLite 持久化数据库缓存（若仅有已读占位记录 ai_score = -1 且未手动打分，则仍需继续调用 AI 打分）
+  // 1. 优先查询持久化数据库缓存（若仅有已读占位记录 ai_score = -1 且未手动打分，则仍需继续调用 AI 打分）
   if (!forceRescore) {
     try {
-      const dbRecord = getScoreRecordByHash(newsHash);
+      const dbRecord = await getScoreRecordByHash(newsHash);
       if (dbRecord && (dbRecord.ai_score >= 0 || Boolean(dbRecord.is_user_modified))) {
         return rowToScoreResult(dbRecord, true);
       }
     } catch (dbErr) {
       logger.warn(
-        `⚠️ [Scorer] SQLite lookup error: ${dbErr instanceof Error ? dbErr.message : "Unknown error"}`,
+        `⚠️ [Scorer] Database lookup error: ${dbErr instanceof Error ? dbErr.message : "Unknown error"}`,
       );
     }
   }
@@ -267,9 +269,9 @@ export const scoreNewsItem = async (
     throw new Error("Failed to parse model response as valid score JSON");
   }
 
-  // 3. 将 AI 打分结果持久化写入 SQLite 数据库
+  // 3. 将 AI 打分结果持久化写入数据库
   try {
-    const savedRow = saveAiScoreRecord({
+    const savedRow = await saveAiScoreRecord({
       newsHash,
       source: meta.source,
       title: meta.title,
@@ -283,13 +285,13 @@ export const scoreNewsItem = async (
     });
 
     logger.info(
-      `🎯 [Scorer] Scored & saved to SQLite (${parsed.score} | ${parsed.layer}): ${formattedText.slice(0, 40)}...`,
+      `🎯 [Scorer] Scored & saved to database (${parsed.score} | ${parsed.layer}): ${formattedText.slice(0, 40)}...`,
     );
 
     return rowToScoreResult(savedRow, false);
   } catch (dbSaveErr) {
     logger.error(
-      `❌ [Scorer] Failed to save score to SQLite: ${dbSaveErr instanceof Error ? dbSaveErr.message : "Unknown error"}`,
+      `❌ [Scorer] Failed to save score to database: ${dbSaveErr instanceof Error ? dbSaveErr.message : "Unknown error"}`,
     );
     return {
       ...parsed,
@@ -324,7 +326,7 @@ export interface ManualScoreInput extends ScoreInputItem {
 /**
  * 接收用户手动修正单条新闻分数的逻辑封装
  */
-export const updateManualScoreItem = (payload: ManualScoreInput): ScoreResult => {
+export const updateManualScoreItem = async (payload: ManualScoreInput): Promise<ScoreResult> => {
   const meta = extractNewsMetadata(payload);
   const recordId =
     typeof payload.recordId === "number"
@@ -373,7 +375,7 @@ export const updateManualScoreItem = (payload: ManualScoreInput): ScoreResult =>
     aiReason: typeof payload.aiReason === "string" ? payload.aiReason : undefined,
   };
 
-  const updatedRow = saveUserManualScore(saveParams);
+  const updatedRow = await saveUserManualScore(saveParams);
   if (!updatedRow) {
     throw new Error(
       "未找到对应的新闻评分记录，请提供有效的 id / newsHash，或提供完整的新闻内容（如 title、desc、source）以创建记录",
@@ -396,7 +398,7 @@ export interface ReadStatusInput extends ScoreInputItem {
 /**
  * 标记或更新单条新闻的已读状态
  */
-export const updateNewsReadStatusItem = (payload: ReadStatusInput): ScoreResult => {
+export const updateNewsReadStatusItem = async (payload: ReadStatusInput): Promise<ScoreResult> => {
   const meta = extractNewsMetadata(payload);
   const recordId =
     typeof payload.recordId === "number"
@@ -423,7 +425,7 @@ export const updateNewsReadStatusItem = (payload: ReadStatusInput): ScoreResult 
     isRead: payload.isRead !== undefined ? Boolean(payload.isRead) : true,
   };
 
-  const updatedRow = saveNewsReadStatus(saveParams);
+  const updatedRow = await saveNewsReadStatus(saveParams);
   if (!updatedRow) {
     throw new Error(
       "未找到对应的新闻记录，请提供有效的 id / newsHash，或提供完整的新闻内容（如 title、desc、source）以记录已读状态",
@@ -503,17 +505,28 @@ export interface CachedLookupResult extends Partial<ScoreResult> {
 }
 
 /**
- * 批量仅查询 SQLite 本地缓存评分（不触发 AI 远程调用，毫秒级返回）
+ * 批量仅查询数据库本地/远程缓存评分（不触发 AI 远程调用，利用批量哈希查询单次往返完成）
  */
-export const lookupCachedScoresBatch = (
+export const lookupCachedScoresBatch = async (
   items: Array<string | ScoreInputItem>,
-): CachedLookupResult[] => {
+): Promise<CachedLookupResult[]> => {
   if (!Array.isArray(items) || items.length === 0) {
     return [];
   }
 
-  return items.map((item) => {
-    const meta = extractNewsMetadata(item);
+  const metas = items.map((item) => extractNewsMetadata(item));
+  const hashes = metas.map((m) => m.newsHash).filter(Boolean);
+
+  let recordsMap = new Map<string, NewsScoreRow>();
+  try {
+    recordsMap = await getScoreRecordsByHashes(hashes);
+  } catch (err) {
+    logger.warn(
+      `⚠️ [Scorer] Batch cache lookup error: ${err instanceof Error ? err.message : "Unknown error"}`,
+    );
+  }
+
+  return metas.map((meta) => {
     const { newsHash } = meta;
     if (!newsHash) {
       return {
@@ -523,38 +536,30 @@ export const lookupCachedScoresBatch = (
       };
     }
 
-    try {
-      const dbRecord = getScoreRecordByHash(newsHash);
-      if (!dbRecord) {
-        return {
-          newsHash,
-          hit: false,
-          isRead: false,
-        };
-      }
-
-      if (dbRecord.ai_score >= 0 || Boolean(dbRecord.is_user_modified)) {
-        return {
-          ...rowToScoreResult(dbRecord, true),
-          newsHash,
-          hit: true,
-          isRead: Boolean(dbRecord.is_read),
-        };
-      }
-
-      // 仅有已读占位记录（ai_score = -1），尚未完成 AI 评分
-      return {
-        newsHash,
-        hit: false,
-        isRead: Boolean(dbRecord.is_read),
-      };
-    } catch {
+    const dbRecord = recordsMap.get(newsHash);
+    if (!dbRecord) {
       return {
         newsHash,
         hit: false,
         isRead: false,
       };
     }
+
+    if (dbRecord.ai_score >= 0 || Boolean(dbRecord.is_user_modified)) {
+      return {
+        ...rowToScoreResult(dbRecord, true),
+        newsHash,
+        hit: true,
+        isRead: Boolean(dbRecord.is_read),
+      };
+    }
+
+    // 仅有已读占位记录（ai_score = -1），尚未完成 AI 评分
+    return {
+      newsHash,
+      hit: false,
+      isRead: Boolean(dbRecord.is_read),
+    };
   });
 };
 

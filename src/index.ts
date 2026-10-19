@@ -1,7 +1,7 @@
 import { serve } from "@hono/node-server";
 import { config } from "./config.js";
 import logger from "./utils/logger.js";
-import { getScoreDb } from "./utils/scoreDb.js";
+import { initScoreDb, getScoreDb } from "./utils/scoreDb.js";
 import app from "./app.js";
 
 // 防止异步打分/网络请求意外异常导致服务崩溃退出
@@ -14,9 +14,9 @@ process.on("unhandledRejection", (reason) => {
 });
 
 // 启动服务器
-const serveHotApi: (port?: number) => void = (port: number = config.PORT) => {
+const serveHotApi = async (port: number = config.PORT) => {
   try {
-    getScoreDb();
+    await initScoreDb();
     const apiServer = serve({
       fetch: app.fetch,
       port,

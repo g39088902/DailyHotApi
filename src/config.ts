@@ -20,6 +20,8 @@ export type Config = {
   DEEPSEEK_BASE_URL: string;
   DEEPSEEK_MODEL: string;
   SQLITE_DB_PATH: string;
+  LIBSQL_URL: string;
+  LIBSQL_AUTH_TOKEN: string;
 };
 
 // 验证并提取环境变量
@@ -61,6 +63,8 @@ export const config: Config = {
   DEEPSEEK_BASE_URL: getEnvVariable("DEEPSEEK_BASE_URL") || "https://api.deepseek.com",
   DEEPSEEK_MODEL: getEnvVariable("DEEPSEEK_MODEL") || "deepseek-flash",
   SQLITE_DB_PATH: getEnvVariable("SQLITE_DB_PATH") || "./data/scores.sqlite",
+  LIBSQL_URL: getEnvVariable("LIBSQL_URL") || "",
+  LIBSQL_AUTH_TOKEN: getEnvVariable("LIBSQL_AUTH_TOKEN") || "",
 };
 
 
